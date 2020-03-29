@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: 2010-09-09
+Metadata:
+  'AWS::CloudFormation::Designer':
+    4a76cc1d-8261-4c0d-b0a3-4c0b2a2ec85b:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 240
+        'y': 100
+      z: 0
+      embeds: []
+      isassociatedwith:
+        - 69ff17d9-dc7b-4ade-8ff5-f35f88204bbc
+    cd9e9787-e3a2-40b8-ac0b-7f615ae0b105:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 390
+        'y': 100
+      z: 0
+      embeds: []
+      isassociatedwith:
+        - 4a76cc1d-8261-4c0d-b0a3-4c0b2a2ec85b
+    d4d7e034-f7a3-455b-ac42-f7c8f943f0fc:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 527
+        'y': 98
+      z: 0
+      embeds: []
+    69ff17d9-dc7b-4ade-8ff5-f35f88204bbc:
+      size:
+        width: 60
+        height: 60
+      position:
+        x: 320
+        'y': 210
+      z: 0
+      embeds: []
+      isassociatedwith:
+        - 4a76cc1d-8261-4c0d-b0a3-4c0b2a2ec85b
+Resources:
+  transcodekit:
+    Type: 'AWS::IAM::User'
+    Properties:
+      UserName: transcodekit
+      Groups:
+        - !Ref TranscodekitAdmins
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: cd9e9787-e3a2-40b8-ac0b-7f615ae0b105
+  TranscodekitAdmins:
+    Type: 'AWS::IAM::Group'
+    Properties:
+      GroupName: TranscodekitAdmins
+      ManagedPolicyArns:
+        - !Ref TranscodekitS3Admin
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 4a76cc1d-8261-4c0d-b0a3-4c0b2a2ec85b
+  transcodekitaccesskey:
+    Type: 'AWS::IAM::AccessKey'
+    Properties:
+      UserName: !Ref transcodekit
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: d4d7e034-f7a3-455b-ac42-f7c8f943f0fc
+  TranscodekitS3Admin:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: !Join
+        - '-'
+        - - !Ref 'AWS::Region'
+          - TranscodekitS3Admin
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - 's3:*'
+            Resource:
+              - 'arn:aws:s3:::transcodekit*'
+    Metadata:
+      'AWS::CloudFormation::Designer':
+        id: 69ff17d9-dc7b-4ade-8ff5-f35f88204bbc
+Outputs:
+  AccessKeyformyaccesskey:
+    Value: !Ref transcodekitaccesskey
+  SecretKeyformyaccesskey:
+    Value: !GetAtt transcodekitaccesskey.SecretAccessKey
