@@ -5,7 +5,6 @@ Parameters:
     Type: String
     Default: 'transcodekit'
 
-
 Resources:
   TranscodekitUser:
     Type: 'AWS::IAM::User'
@@ -40,14 +39,98 @@ Resources:
             Action:
               - 's3:*'
             Resource:
-              - !Sub 'arn:aws:s3:::${S3Bucket}'
-              - !Sub 'arn:aws:s3:::${S3Bucket}/*'
+              - !Sub 'arn:aws:s3:::${BucketName}'
+              - !Sub 'arn:aws:s3:::${BucketName}/*'
+
+  TranscodekitLambdaPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: !Join
+        - '-'
+        - - !Ref 'AWS::Region'
+          - TranscodekitLambdaExecutor
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - 's3:PutObject'
+            Resource:
+              - !Sub 'arn:aws:s3:::${BucketName}/assets/*'
+          - Effect: Allow
+            Action:
+              - 's3:GetObject'
+            Resource:
+              - !Sub 'arn:aws:s3:::${BucketName}/originals/*'
+          - Effect: Allow
+            Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Resource:
+              - '*'
+
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: LambdaExecution
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - !Ref TranscodekitLambdaPolicy
+
+  S3ExecutionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt TranscodeVideoFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref 'AWS::AccountId'
+      SourceArn: !Sub 'arn:aws:s3:::${BucketName}'
+
+  TranscodeVideoFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: TranscodeVideo
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: !Sub |
+          const util = require('util')
+          exports.handler = function(event, context) {
+            console.log(util.inspect(event, { depth: null }), util.inspect(context, { depth: null }))
+            /*
+             * event.s3 =~ {
+             *   bucket: { name, ownerIdentity: { principalId }, arn },
+             *   object: { key, size, eTag, sequencer }
+             * }
+             */
+          }
+      Runtime: nodejs12.x
 
   S3Bucket:
     Type: 'AWS::S3::Bucket'
+    DependsOn:
+      - S3ExecutionPermission
     Properties:
       BucketName: !Ref BucketName
-
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: 's3:ObjectCreated:*'
+            Function: !GetAtt TranscodeVideoFunction.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: 'originals/'
 
 Outputs:
   AccessKey:
