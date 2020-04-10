@@ -6,6 +6,7 @@ Parameters:
     Default: 'transcodekit'
 
 Resources:
+  # START: Transcodekit User
   TranscodekitUser:
     Type: 'AWS::IAM::User'
     Properties:
@@ -18,20 +19,21 @@ Resources:
     Properties:
       GroupName: TranscodekitAdmins
       ManagedPolicyArns:
-        - !Ref TranscodekitS3Admin
+        - !Ref TranscodekitAdmin
 
   TranscodekitAccessKey:
     Type: 'AWS::IAM::AccessKey'
     Properties:
       UserName: !Ref TranscodekitUser
 
-  TranscodekitS3Admin:
+  TranscodekitAdmin:
     Type: 'AWS::IAM::ManagedPolicy'
     Properties:
+      Description: Provides full access to Transcodekit resources
       ManagedPolicyName: !Join
         - '-'
         - - !Ref 'AWS::Region'
-          - TranscodekitS3Admin
+          - TranscodekitAdmin
       PolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -41,10 +43,13 @@ Resources:
             Resource:
               - !Sub 'arn:aws:s3:::${BucketName}'
               - !Sub 'arn:aws:s3:::${BucketName}/*'
+  # END: Transcodekit User
 
+  # START: Transcodekit lambda function
   TranscodekitLambdaPolicy:
     Type: 'AWS::IAM::ManagedPolicy'
     Properties:
+      Description: Provides necessary access to MediaConvert and CloudWatch logs
       ManagedPolicyName: !Join
         - '-'
         - - !Ref 'AWS::Region'
@@ -54,14 +59,10 @@ Resources:
         Statement:
           - Effect: Allow
             Action:
-              - 's3:PutObject'
+              - mediaconvert:CreateJob
+              - mediaconvert:DescribeEndpoints
             Resource:
-              - !Sub 'arn:aws:s3:::${BucketName}/assets/*'
-          - Effect: Allow
-            Action:
-              - 's3:GetObject'
-            Resource:
-              - !Sub 'arn:aws:s3:::${BucketName}/originals/*'
+              - '*'
           - Effect: Allow
             Action:
               - 'logs:CreateLogGroup'
@@ -69,11 +70,17 @@ Resources:
               - 'logs:PutLogEvents'
             Resource:
               - '*'
+          - Effect: Allow
+            Action:
+              - 'iam:PassRole'
+            Resource:
+              - !GetAtt MediaConvertRole.Arn
 
   LambdaExecutionRole:
     Type: 'AWS::IAM::Role'
     Properties:
       RoleName: LambdaExecution
+      Description: Allows Transcodekit lambda function to start MediaConvert job
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -87,35 +94,69 @@ Resources:
       ManagedPolicyArns:
         - !Ref TranscodekitLambdaPolicy
 
-  S3ExecutionPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !GetAtt TranscodeVideoFunction.Arn
-      Action: lambda:InvokeFunction
-      Principal: s3.amazonaws.com
-      SourceAccount: !Ref 'AWS::AccountId'
-      SourceArn: !Sub 'arn:aws:s3:::${BucketName}'
-
   TranscodeVideoFunction:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: TranscodeVideo
+      Description: Sends uploaded S3 object to MediaConvert for transcoding
       Handler: index.handler
       Role: !GetAtt LambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          ROLE: !GetAtt MediaConvertRole.Arn
       Code:
-        ZipFile: !Sub |
-          const util = require('util')
-          exports.handler = function(event, context) {
-            console.log(util.inspect(event, { depth: null }), util.inspect(context, { depth: null }))
-            /*
-             * event.s3 =~ {
-             *   bucket: { name, ownerIdentity: { principalId }, arn },
-             *   object: { key, size, eTag, sequencer }
-             * }
-             */
+        ZipFile: |
+          const path = require('path')
+          const MediaConvert = require('aws-sdk/clients/mediaconvert')
+
+          exports.handler = async function(event, context, cb) {
+            const mediaConvert = new MediaConvert({
+              apiVersion: '2017-08-29'
+            })
+            const s3Record = event.Records[0].s3
+            const { base: fileName, name: title } = path.parse(s3Record.object.key)
+
+            if (!fileName.match(/^(\d+)/)) {
+              cb(`Expected leading year in file name: ${fileName}`)
+              return
+            }
+
+            try {
+              const { Endpoints: [{ Url: endpoint }]} = await mediaConvert.describeEndpoints().promise()
+              mediaConvert.endpoint = endpoint
+
+              const response = await mediaConvert.createJob({
+                Role: process.env.ROLE,
+                JobTemplate: 'System-Ott_Hls_Ts_Avc_Aac',
+                Settings: {
+                  Inputs: [{
+                    FileInput: `s3://${s3Record.bucket.name}/${s3Record.object.key}`,
+                    AudioSelectors: {
+                      'Audio Selector 1': {
+                        Offset: 0
+                      }
+                    },
+                  }],
+                  OutputGroups: [{
+                    OutputGroupSettings: {
+                      Type: 'HLS_GROUP_SETTINGS',
+                      HlsGroupSettings: {
+                        Destination: `s3://${s3Record.bucket.name}/assets/${title}/`
+                      }
+                    }
+                  }]
+                },
+              }).promise()
+
+              cb(null, response)
+            } catch (e) {
+              cb(e.message)
+            }
           }
       Runtime: nodejs12.x
+  # END: Transcodekit lambda function
 
+  # START: Transcodekit S3 bucket
   S3Bucket:
     Type: 'AWS::S3::Bucket'
     DependsOn:
@@ -131,6 +172,58 @@ Resources:
                 Rules:
                   - Name: prefix
                     Value: 'originals/'
+
+  S3ExecutionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt TranscodeVideoFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref 'AWS::AccountId'
+      SourceArn: !Sub 'arn:aws:s3:::${BucketName}'
+  # END: Transcodekit S3 bucket
+
+  # START: Transcodekit MediaConvert
+  TranscodekitMediaConvertPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: !Join
+        - '-'
+        - - !Ref 'AWS::Region'
+          - TranscodekitMediaConverter
+      Description: Provides access to S3 for MediaConvert transcode jobs
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - 's3:PutObject'
+            Resource:
+              - !Sub 'arn:aws:s3:::${BucketName}/assets/*'
+          - Effect: Allow
+            Action:
+              - 's3:GetObject'
+            Resource:
+              - !Sub 'arn:aws:s3:::${BucketName}/originals/*'
+
+  MediaConvertRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: MediaConvertExecution
+      Description: Allows MediaConvert to gain access to S3
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - mediaconvert.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - !Ref TranscodekitMediaConvertPolicy
+  # END: Transcodekit MediaConvert
 
 Outputs:
   AccessKey:
