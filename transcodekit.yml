@@ -116,16 +116,11 @@ Resources:
             const s3Record = event.Records[0].s3
             const { base: fileName, name: title } = path.parse(s3Record.object.key)
 
-            if (!fileName.match(/^(\d+)/)) {
-              cb(`Expected leading year in file name: ${fileName}`)
-              return
-            }
-
             try {
               const { Endpoints: [{ Url: endpoint }]} = await mediaConvert.describeEndpoints().promise()
               mediaConvert.endpoint = endpoint
 
-              const response = await mediaConvert.createJob({
+              const hlsResponse = await mediaConvert.createJob({
                 Role: process.env.ROLE,
                 JobTemplate: 'System-Ott_Hls_Ts_Avc_Aac',
                 Settings: {
@@ -141,14 +136,37 @@ Resources:
                     OutputGroupSettings: {
                       Type: 'HLS_GROUP_SETTINGS',
                       HlsGroupSettings: {
-                        Destination: `s3://${s3Record.bucket.name}/assets/${title}/`
+                        Destination: `s3://${s3Record.bucket.name}/assets/${title}/hls/`
                       }
                     }
                   }]
                 },
               }).promise()
 
-              cb(null, response)
+              const dashResponse = await mediaConvert.createJob({
+                Role: process.env.ROLE,
+                JobTemplate: 'System-Ott_Dash_Mp4_Avc_Aac',
+                Settings: {
+                  Inputs: [{
+                    FileInput: `s3://${s3Record.bucket.name}/${s3Record.object.key}`,
+                    AudioSelectors: {
+                      'Audio Selector 1': {
+                        Offset: 0
+                      }
+                    },
+                  }],
+                  OutputGroups: [{
+                    OutputGroupSettings: {
+                      Type: 'DASH_ISO_GROUP_SETTINGS',
+                      DashIsoGroupSettings: {
+                        Destination: `s3://${s3Record.bucket.name}/assets/${title}/dash/`
+                      }
+                    }
+                  }]
+                },
+              }).promise()
+
+              cb(null, [hlsResponse, dashResponse])
             } catch (e) {
               cb(e.message)
             }
