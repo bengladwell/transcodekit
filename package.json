@@ -17,7 +17,7 @@
   },
   "homepage": "https://github.com/bengladwell/transcodekit#readme",
   "dependencies": {
-    "aws-sdk": "^2.644.0"
+    "aws-sdk": "^2.814.0"
   },
   "devDependencies": {
     "eslint": "^6.8.0",
